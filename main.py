@@ -381,7 +381,7 @@ class WsKeepalivePlugin(BasePlugin):
             key = str(gid)
             now = time.monotonic()
             cache = client_self.__dict__.get("_wskeep_group_info_cache")
-            if cache is None:
+            if not isinstance(cache, dict):
                 cache = {}
                 try:
                     client_self._wskeep_group_info_cache = cache
@@ -390,12 +390,15 @@ class WsKeepalivePlugin(BasePlugin):
                     return await orig(client_self, *args, **kwargs)
 
             hit = cache.get(key)
-            if hit is not None and hit[0] > now:
+            # 防御：条目结构异常（旧版本残留/外部误写）时当作未命中，绝不让
+            # 缓存里的脏数据把 get_group_info 变成异常源。
+            if isinstance(hit, tuple) and len(hit) == 2 and hit[0] > now:
                 return copy.deepcopy(hit[1])
 
             resp = await orig(client_self, *args, **kwargs)
             if cacheable(resp):
-                cache[key] = (now + ttl, copy.deepcopy(resp))
+                # 过期时间从**响应返回时**起算（慢请求不会白吃 TTL）
+                cache[key] = (time.monotonic() + ttl, copy.deepcopy(resp))
                 if len(cache) > max_entries:
                     # 有界：按插入顺序淘汰最旧的（dict 保序，不额外记账）
                     for old_key in list(cache.keys())[: len(cache) - max_entries]:

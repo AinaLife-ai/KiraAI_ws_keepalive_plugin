@@ -183,6 +183,16 @@ async def main():
     check("11a 关闭重载后不再走缓存", patched2 is False and len(c.calls) == 2)
     check("11b 类方法已还原为原始实现", FakeClient.get_group_info is orig)
 
+    # 12. 缓存里的脏数据不能让 get_group_info 变成异常源
+    p = fresh(); p._patch_group_cache(); c = FakeClient()
+    c._wskeep_group_info_cache = {1: "junk"}      # 结构异常的旧条目
+    r = await c.get_group_info(1)
+    check("12a 脏条目按未命中处理", r["data"]["group_name"] == "群1" and len(c.calls) == 1)
+    c._wskeep_group_info_cache = "not-a-dict"     # 整个缓存字段类型错误
+    r = await c.get_group_info(2)
+    check("12b 缓存字段类型错误也不炸", r["data"]["group_name"] == "群2")
+    p._restore_group_cache()
+
     print("\n" + ("ALL PASSED" if not FAIL else f"FAILED: {FAIL}"))
     return 0 if not FAIL else 1
 
