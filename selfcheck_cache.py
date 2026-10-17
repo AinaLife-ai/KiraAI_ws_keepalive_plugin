@@ -173,6 +173,16 @@ async def main():
     check("10b 并发后缓存生效", len(c.calls) == before, f"calls={len(c.calls)}")
     p._restore_group_cache()
 
+    # 11. 热重载：开 → 关，旧包装必须被拆掉（否则「关闭」不生效）
+    p1 = fresh(enabled=True); p1._patch_group_cache()
+    orig = getattr(FakeClient.get_group_info, "__wrapped__", FakeClient.get_group_info)
+    p2 = fresh(enabled=False)                 # 新实例配置=关闭
+    patched2 = p2._patch_group_cache()        # initialize 会无条件调用
+    c = FakeClient()
+    await c.get_group_info(7); await c.get_group_info(7)
+    check("11a 关闭重载后不再走缓存", patched2 is False and len(c.calls) == 2)
+    check("11b 类方法已还原为原始实现", FakeClient.get_group_info is orig)
+
     print("\n" + ("ALL PASSED" if not FAIL else f"FAILED: {FAIL}"))
     return 0 if not FAIL else 1
 

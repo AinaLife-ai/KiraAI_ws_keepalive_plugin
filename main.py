@@ -208,8 +208,10 @@ class WsKeepalivePlugin(BasePlugin):
             )
 
         # 群信息缓存：把「每条群消息一次 get_group_info」的重复 WS 往返省掉
+        # 关闭时也调用：会拆掉旧实例（热重载残留）的包装，确保关闭立即生效
+        cache_ok = self._patch_group_cache()
         if self.group_cache_enabled:
-            if self._patch_group_cache():
+            if cache_ok:
                 logger.info(
                     f"[{_SELF_PLUGIN_ID}] 群信息缓存已启用: ttl={self.group_cache_ttl:.0f}s "
                     f"max={self.group_cache_max} 群（只缓存成功响应，失败不缓存）"
@@ -406,14 +408,23 @@ class WsKeepalivePlugin(BasePlugin):
         return cached_get_group_info
 
     def _patch_group_cache(self) -> bool:
-        """把带缓存的 `get_group_info` 装到客户端类上（新老实例同时生效）。"""
-        if not self.group_cache_enabled:
-            return False
+        """把带缓存的 `get_group_info` 装到客户端类上（新老实例同时生效）。
+
+        关闭时不是简单 return：如果类上还残留**上一个插件实例**的包装
+        （热重载时旧实例可能来不及 terminate），这里把它拆回原始实现，
+        确保「改成关闭」在重载后立即生效。
+        """
         cls = self._napcat_client_class()
         if cls is None:
             return False
         cur = cls.__dict__.get("get_group_info")
         if cur is None:
+            return False
+        if not self.group_cache_enabled:
+            if getattr(cur, "__wskeep_group_cache__", False):
+                orig = getattr(cur, "__wrapped__", None)
+                if orig is not None:
+                    cls.get_group_info = orig
             return False
         if getattr(cur, "__wskeep_group_cache__", False):
             # 热重载残留的旧包装：拆回原始实现再重包，避免缓存套缓存
